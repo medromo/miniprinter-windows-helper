@@ -213,12 +213,26 @@ function ConvertFrom-EscPos {
   return [Text.Encoding]::GetEncoding(437).GetString($out.ToArray())
 }
 
+# The producer appends a recap after the orders — every day with its invoices
+# and the grand total. It is the one ticket in the file that is not an order,
+# and this heading is how it says so.
+$SummaryHeading = 'RESUMEN DE DEPOSITOS'
+
+function Test-HasSummaryTicket {
+  param([string]$Text)
+  if (-not $Text) { return $false }
+  return $Text -match ('(?m)^{0}\s*$' -f [regex]::Escape($SummaryHeading))
+}
+
 function Get-OrderSummary {
   param([string]$Text)
   if (-not $Text) { return $null }
   $orders = @()
   foreach ($chunk in ($Text -split "`f")) {
     if ($chunk.Trim() -eq '') { continue }
+    # Skipped by name, not by "it didn't parse": a chunk that should have been
+    # an order and wasn't still has to abort the whole preview.
+    if (Test-HasSummaryTicket -Text $chunk) { continue }
     $lines = $chunk -split "`n"
     $date = $null
     $amount = $null
@@ -284,8 +298,15 @@ function Show-PrintConfirmation {
     }
   }
   else {
+    # "tickets", not "órdenes": with no detail there is no way to tell whether
+    # one of those cuts belongs to the summary.
     $cuts = Measure-CutCount -Bytes $Bytes
-    $lines.Add(('{0} órdenes de depósito — no se pudo leer el detalle.' -f $cuts))
+    $lines.Add(('{0} tickets de depósito — no se pudo leer el detalle.' -f $cuts))
+  }
+
+  if (Test-HasSummaryTicket -Text $text) {
+    $lines.Add('')
+    $lines.Add('Incluye un resumen de la corrida.')
   }
 
   $generated = $null

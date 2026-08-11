@@ -81,6 +81,8 @@ Se imprimirán 3 órdenes de depósito:
 
   Total: $35,770.50
 
+Incluye un resumen de la corrida.
+
 Archivo:   2026-08-11-ordenes-deposito.bin
 Generado:  11/08/2026 14:32
 Impresora: EPSON TM-T20II Receipt
@@ -98,6 +100,13 @@ what separates one order from the next.
 escape sequence aborts the decode and the dialog falls back to
 `N órdenes — no se pudo leer el detalle`, still offering to print. The count in
 that fallback is a byte scan for cut sequences, which can't be wrong.
+
+One chunk in the file is deliberately **not** an order: the producer ends the
+stream with a recap — every day with its invoices and the grand total — headed
+`RESUMEN DE DEPOSITOS`. The decoder skips it **by that heading**, never by "this
+chunk didn't parse", so a chunk that should have been an order and wasn't still
+aborts the whole preview. That distinction is the point: degrading is only safe
+when you know what you're degrading past.
 
 Showing the `Generado` timestamp is also what replaces a separate "this file is
 old" guard: a file from yesterday is self-evident once the date is on screen. The
@@ -327,8 +336,8 @@ Exit codes: `0` printed, `1` error, `2` nothing to print, `3` cancelled or busy.
 
 ## The file format it expects
 
-The helper depends on the byte format in exactly two places, and both fail
-safely:
+The helper depends on the producer's format in three places, and all of them
+fail safely:
 
 - **The magic check** (`ESC @` as the first two bytes) — every ESC/POS stream
   opens with it, and moving it would break real printers too.
@@ -337,6 +346,16 @@ safely:
   seventh — underline, a barcode, a logo — and the decode aborts, the dialog
   drops to the order count, and printing carries on unaffected. If you add one,
   add its length to `ConvertFrom-EscPos`.
+- **Three line labels in the decoded text** — `Dia de ventas:`,
+  `Monto a depositar:` and `Generado:`, which are where the dialog's figures come
+  from, plus the `RESUMEN DE DEPOSITOS` heading that marks the control sheet.
+  Reword one of the first three and the dialog falls back to the count; reword
+  the heading and the summary is counted as an order it can't read, which drops
+  the dialog to the same fallback.
+
+Every ticket still prints byte for byte in all of those cases. The helper never
+rewrites the stream it was handed — it only reads it, and what degrades is the
+operator's preview.
 
 Nothing else is shared with whatever produced the file. The helper never parses
 folios, branches, or anything the bank teller shouldn't be shown anyway.
