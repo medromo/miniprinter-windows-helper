@@ -55,8 +55,7 @@ Both go through the same sequence:
    `.bin` from being pushed at the printer as if it were ours.
 3. **Decode the preview** (see below) and show it for confirmation.
 4. **Print RAW**, with the file name as the spooler document name so the job is
-   identifiable in the queue — the file's own bytes, followed by the summary
-   ticket when there is more than one order.
+   identifiable in the queue.
 5. **Archive** the file with a timestamp prefix and prune anything older than the
    retention window. Moved, not deleted: it can't be reprinted by accident and
    there's a trail.
@@ -82,8 +81,6 @@ Se imprimirán 3 órdenes de depósito:
 
   Total: $35,770.50
 
-Se añadirá un resumen para control interno.
-
 Archivo:   2026-08-11-ordenes-deposito.bin
 Generado:  11/08/2026 14:32
 Impresora: EPSON TM-T20II Receipt
@@ -106,55 +103,6 @@ Showing the `Generado` timestamp is also what replaces a separate "this file is
 old" guard: a file from yesterday is self-evident once the date is on screen. The
 dialog still switches to a warning icon and adds a line when the file is more
 than two hours old.
-
-### The summary ticket
-
-The orders themselves are single-purpose: each one goes to the teller on its own
-and shows one day and one amount, because that is all the counter needs. Nothing
-on paper says what the whole trip to the bank adds up to — and that total is
-exactly what the person carrying the cash needs to check before leaving, and what
-whoever sent them needs afterwards.
-
-So the helper prints one more ticket, from the same figures the dialog shows:
-
-```
-             MASCOTAS Y MAS S.A. DE C.V.
-                RESUMEN DE DEPOSITOS
-------------------------------------------
-09 ago 2026                     $12,450.00
-10 ago 2026                      $8,320.50
-11 ago 2026                     $15,000.00
-------------------------------------------
-Ordenes:                                 3
-TOTAL A DEPOSITAR:
-
-              $35,770.50
-
-------------------------------------------
-Deposito en:                          BBVA
-Cuenta:                       0123456789
-Generado:                 11/08/2026 14:32
-Impreso:                  11/08/2026 14:35
-------------------------------------------
-Control interno. Este resumen no se
-entrega en el banco.
-```
-
-Four things about it are deliberate:
-
-- **It is appended to the same print job**, after the orders, so it comes off the
-  stack on top of what it covers and nothing can slip into the spooler between
-  them.
-- **It is skipped for a single order.** That order already carries its own total
-  in triple size; a summary would be a second copy of the same figure.
-- **It carries both timestamps.** `Generado` comes out of the file — when the app
-  built it — and `Impreso` is the station clock. A gap between them is the
-  question worth asking.
-- **It says on the paper that it is not for the bank.** The two kinds of ticket
-  come out of the same printer seconds apart, and the summary is the one that
-  shows every day at once.
-
-Set `"printSummary": false` in `config.json` to turn it off.
 
 ### Why polling instead of FileSystemWatcher
 
@@ -194,15 +142,13 @@ default.
   "downloadsPath": "",
   "archivePath": "",
   "archiveRetentionDays": 30,
-  "pollSeconds": 3,
-  "printSummary": true
+  "pollSeconds": 3
 }
 ```
 
 Leave `printerName` as `""` to let it auto-detect, `downloadsPath` as `""` for
 `%USERPROFILE%\Downloads`, and `archivePath` as `""` for an `ordenes-impresas`
-folder beside the script. `printSummary` is the only one that isn't a path or a
-number: set it to `false` to stop printing the summary ticket.
+folder beside the script.
 
 Point `archivePath` at an absolute path outside the install folder if you ever
 expect to replace that folder wholesale — otherwise the archive goes with it.
@@ -352,9 +298,8 @@ is what breaks a strict JSON parser.
 ## Day to day
 
 Download the orders from the app. Within a few seconds the dialog appears with
-the days and amounts; confirm and the printer cuts one order per day, plus the
-summary on top. The file moves to `ordenes-impresas\` and stays there for a
-month.
+the days and amounts; confirm and the printer cuts one order per day. The file
+moves to `ordenes-impresas\` and stays there for a month.
 
 To reprint one, point the launcher at the archived file:
 
@@ -375,7 +320,6 @@ Exit codes: `0` printed, `1` error, `2` nothing to print, `3` cancelled or busy.
 | Nothing happens after downloading | The watcher isn't running — no tray icon. Use the shortcut, then check the scheduled task. |
 | `No existe una impresora llamada '…'` | The printer was renamed or reinstalled. The message lists what's installed; update `config.json`. |
 | Dialog says *no se pudo leer el detalle* | The producer emits a control sequence the decoder doesn't know. Printing still works; see the format note below. |
-| The summary ticket didn't print | Only one order in the file, `printSummary` is `false`, or the dialog said *no se pudo leer el detalle* — with no detail there is nothing to summarise. |
 | `OpenPrinter falló` | Printer offline, unplugged, or a driver that's gone. Check it in Windows first. |
 | Job appears in the queue and stalls | Spooler wedged. `Restart-Service Spooler`, clear the queue, retry. |
 | Accents print as garbage | The printer was left on another code page by other software, or the `.ps1` was saved without the BOM. `ESC t 0` is sent per job, so suspect the BOM first. |
@@ -383,7 +327,7 @@ Exit codes: `0` printed, `1` error, `2` nothing to print, `3` cancelled or busy.
 
 ## The file format it expects
 
-The helper depends on the byte format in three places, and all of them fail
+The helper depends on the byte format in exactly two places, and both fail
 safely:
 
 - **The magic check** (`ESC @` as the first two bytes) — every ESC/POS stream
@@ -393,15 +337,6 @@ safely:
   seventh — underline, a barcode, a logo — and the decode aborts, the dialog
   drops to the order count, and printing carries on unaffected. If you add one,
   add its length to `ConvertFrom-EscPos`.
-- **Four line labels in the decoded text** — `Dia de ventas:` and
-  `Monto a depositar:` per order, and `Deposito en:` / `Cuenta:` / `Titular:` /
-  `Generado:` for the account block. The first two are what the dialog and the
-  summary are built from: rename one and both fall back to the order count, and
-  no summary prints. The account labels are read one by one, so renaming any of
-  them only drops that line from the summary.
-
-The orders still print correctly in every one of those cases — the helper never
-rewrites the stream it was given, it only reads it.
 
 Nothing else is shared with whatever produced the file. The helper never parses
 folios, branches, or anything the bank teller shouldn't be shown anyway.

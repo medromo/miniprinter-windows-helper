@@ -22,8 +22,6 @@ Add-Type -AssemblyName System.Drawing
 $FilePattern = '*-ordenes-deposito*.bin'
 $MaxFileBytes = 1MB
 $StaleAfterHours = 2
-# Font A on the TM-T20II. Also correct in 48-column mode, only narrower.
-$SummaryColumns = 42
 
 # ---------------------------------------------------------------- config ----
 
@@ -34,7 +32,6 @@ function Get-HelperConfig {
     archivePath          = ''
     archiveRetentionDays = 30
     pollSeconds          = 3
-    printSummary         = $true
   }
   $file = Join-Path $PSScriptRoot 'config.json'
   if (Test-Path -LiteralPath $file) {
@@ -244,31 +241,6 @@ function Get-OrderSummary {
   return $orders
 }
 
-# The account block, read from the same decoded text. Each field degrades on
-# its own: a producer that renames one label loses that line from the summary
-# and nothing else.
-function Get-AccountSummary {
-  param([string]$Text)
-  if (-not $Text) { return $null }
-  $bank = $null
-  $number = $null
-  $holder = $null
-  foreach ($raw in ($Text -split "`n")) {
-    $line = $raw.TrimEnd()
-    if (-not $bank -and $line -match '^Deposito en:\s+(.+)$') { $bank = $Matches[1].Trim() }
-    if (-not $number -and $line -match '^Cuenta:\s+(.+)$') { $number = $Matches[1].Trim() }
-    if (-not $holder -and $line -match '^Titular:\s+(.+)$') { $holder = $Matches[1].Trim() }
-  }
-  if (-not $bank -and -not $number -and -not $holder) { return $null }
-  return [PSCustomObject]@{ Bank = $bank; Number = $number; Holder = $holder }
-}
-
-function Get-GeneratedStamp {
-  param([string]$Text)
-  if ($Text -and $Text -match 'Generado:\s*(.+)') { return $Matches[1].Trim() }
-  return $null
-}
-
 function Measure-CutCount {
   param([byte[]]$Bytes)
   $count = 0
@@ -283,107 +255,32 @@ function ConvertTo-Decimal {
   return [decimal]($Money -replace '[^\d\.\-]', '')
 }
 
-function Measure-OrderTotal {
-  param($Orders)
-  $total = [decimal]0
-  foreach ($order in $Orders) { $total += ConvertTo-Decimal $order.Amount }
-  return $total
-}
-
-# InvariantCulture on purpose: the amounts on the paper come from the producer
-# formatted as $1,234.56, and a station left on a comma-decimal locale would
-# print a total that doesn't match the orders it adds up.
-function Format-Money {
-  param([decimal]$Amount)
-  return '$' + $Amount.ToString('N2', [Globalization.CultureInfo]::InvariantCulture)
-}
-
-# --------------------------------------------------------------- summary ----
-
-function Format-TwoCol {
-  param([string]$Left, [string]$Right)
-  $gap = $SummaryColumns - $Left.Length - $Right.Length
-  if ($gap -gt 0) { return $Left + (' ' * $gap) + $Right }
-  return "$Left $Right"
-}
-
-# One extra ticket listing every day in the batch and the grand total, built
-# from the same figures the dialog shows. It is the operator's control sheet:
-# the orders go to the teller one at a time, and this is the only piece of
-# paper that says what the whole trip to the bank adds up to.
-function New-SummaryTicket {
-  param($Orders, $Account, [string]$Generated)
-  $cp437 = [Text.Encoding]::GetEncoding(437)
-  $bytes = New-Object System.Collections.Generic.List[byte]
-  $add = { param([byte[]]$b) foreach ($x in $b) { $bytes.Add($x) } }
-  $line = { param([string]$s) & $add $cp437.GetBytes($s); $bytes.Add(0x0A) }
-  $divider = '-' * $SummaryColumns
-
-  & $add ([byte[]](0x1B, 0x40))              # init
-  & $add ([byte[]](0x1B, 0x74, 0x00))        # CP437
-  & $add ([byte[]](0x1B, 0x61, 0x01))        # center
-  & $add ([byte[]](0x1B, 0x45, 0x01))        # bold on
-  if ($Account -and $Account.Holder) { & $line $Account.Holder }
-  # CP437 has no accented capitals, so every heading here stays unaccented.
-  & $line 'RESUMEN DE DEPOSITOS'
-  & $add ([byte[]](0x1B, 0x45, 0x00))        # bold off
-  & $add ([byte[]](0x1B, 0x61, 0x00))        # left
-  & $line $divider
-
-  foreach ($order in $Orders) {
-    & $line (Format-TwoCol $order.Date $order.Amount)
-  }
-
-  & $line $divider
-  & $line (Format-TwoCol 'Ordenes:' ([string]@($Orders).Count))
-  & $line 'TOTAL A DEPOSITAR:'
-  & $add ([byte[]](0x1B, 0x61, 0x01))        # center
-  & $add ([byte[]](0x1D, 0x21, 0x22))        # triple size
-  & $add ([byte[]](0x1B, 0x45, 0x01))        # bold on
-  & $line (Format-Money (Measure-OrderTotal -Orders $Orders))
-  & $add ([byte[]](0x1B, 0x45, 0x00))
-  & $add ([byte[]](0x1D, 0x21, 0x00))
-  & $add ([byte[]](0x1B, 0x61, 0x00))
-  $bytes.Add(0x0A)
-  & $line $divider
-
-  if ($Account -and $Account.Bank) { & $line (Format-TwoCol 'Deposito en:' $Account.Bank) }
-  if ($Account -and $Account.Number) { & $line (Format-TwoCol 'Cuenta:' $Account.Number) }
-  if ($Generated) { & $line (Format-TwoCol 'Generado:' $Generated) }
-  & $line (Format-TwoCol 'Impreso:' (Get-Date -Format 'dd/MM/yyyy HH:mm'))
-  & $line $divider
-  & $line 'Control interno. Este resumen no se'
-  & $line 'entrega en el banco.'
-  & $add ([byte[]](0x1D, 0x56, 0x42, 0x03))  # feed and partial cut
-
-  return $bytes.ToArray()
-}
-
 # ---------------------------------------------------------------- dialog ----
 
 function Show-PrintConfirmation {
   param(
     [System.IO.FileInfo]$File,
     [byte[]]$Bytes,
-    [string]$Printer,
-    [string]$Text,
-    $Orders,
-    [switch]$WithSummary
+    [string]$Printer
   )
+  $text = ConvertFrom-EscPos -Bytes $Bytes
+  $orders = Get-OrderSummary -Text $text
   $lines = New-Object System.Collections.Generic.List[string]
 
-  if ($Orders) {
-    $count = @($Orders).Count
+  if ($orders) {
+    $count = @($orders).Count
     $noun = if ($count -eq 1) { 'orden' } else { 'órdenes' }
     $verb = if ($count -eq 1) { 'Se imprimirá' } else { 'Se imprimirán' }
     $lines.Add(('{0} {1} {2} de depósito:' -f $verb, $count, $noun))
     $lines.Add('')
-    foreach ($order in $Orders) {
+    foreach ($order in $orders) {
       $lines.Add(('   {0} — {1}' -f $order.Date, $order.Amount))
     }
     if ($count -gt 1) {
+      $total = 0
+      foreach ($order in $orders) { $total += ConvertTo-Decimal $order.Amount }
       $lines.Add('')
-      $lines.Add(('   Total: {0}' -f (Format-Money (Measure-OrderTotal -Orders $Orders))))
+      $lines.Add(('   Total: ${0}' -f $total.ToString('N2', [Globalization.CultureInfo]::InvariantCulture)))
     }
   }
   else {
@@ -391,12 +288,8 @@ function Show-PrintConfirmation {
     $lines.Add(('{0} órdenes de depósito — no se pudo leer el detalle.' -f $cuts))
   }
 
-  if ($WithSummary) {
-    $lines.Add('')
-    $lines.Add('Se añadirá un resumen para control interno.')
-  }
-
-  $generated = Get-GeneratedStamp -Text $Text
+  $generated = $null
+  if ($text -and $text -match 'Generado:\s*(.+)') { $generated = $Matches[1].Trim() }
 
   $lines.Add('')
   $lines.Add(('Archivo:   {0}' -f $File.Name))
@@ -516,35 +409,16 @@ function Invoke-PrintJob {
       throw ('{0} no empieza con ESC @; no es un archivo de órdenes.' -f $File.Name)
     }
 
-    $text = ConvertFrom-EscPos -Bytes $bytes
-    $orders = Get-OrderSummary -Text $text
-
-    # A single order already carries its own total in triple size; there is
-    # nothing to summarise, and the extra ticket would just be a second copy.
-    $summary = $null
-    if ($Config.printSummary -and $orders -and @($orders).Count -gt 1) {
-      $summary = New-SummaryTicket -Orders @($orders) `
-        -Account (Get-AccountSummary -Text $text) `
-        -Generated (Get-GeneratedStamp -Text $text)
-    }
-
     if (-not $NoPrompt) {
-      $confirmed = Show-PrintConfirmation -File $File -Bytes $bytes -Printer $Printer `
-        -Text $text -Orders $orders -WithSummary:($null -ne $summary)
-      if (-not $confirmed) {
+      if (-not (Show-PrintConfirmation -File $File -Bytes $bytes -Printer $Printer)) {
         Write-Log ('CANCELADO  {0}' -f $File.Name)
         return 'cancelled'
       }
     }
 
-    # Appended to the same job rather than sent as a second one: the summary
-    # prints last, so it comes off the stack on top of the orders it covers,
-    # and nothing else can slip into the spooler between them.
-    $payload = if ($summary) { $bytes + $summary } else { $bytes }
-    Send-RawBytes -Printer $Printer -DocumentName $File.BaseName -Payload $payload
+    Send-RawBytes -Printer $Printer -DocumentName $File.BaseName -Payload $bytes
     Move-ToArchive -File $File -Config $Config
-    $note = if ($summary) { ' +resumen' } else { '' }
-    Write-Log ('IMPRESO    {0}  {1:N0} bytes{2}  -> {3}' -f $File.Name, $payload.Length, $note, $Printer)
+    Write-Log ('IMPRESO    {0}  {1:N0} bytes  -> {2}' -f $File.Name, $bytes.Length, $Printer)
     return 'printed'
   }
   finally {
