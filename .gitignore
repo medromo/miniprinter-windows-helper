@@ -1,0 +1,12 @@
+# Runtime output on the station, not source
+ordenes-impresas/
+*.bin
+*.log
+
+# Shortcuts are created by the installer, not tracked
+*.lnk
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini

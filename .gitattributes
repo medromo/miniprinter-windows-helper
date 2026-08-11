@@ -1,0 +1,4 @@
+# The station consumes these files verbatim: CRLF line endings and the UTF-8 BOM
+# on the .ps1 are load-bearing for Windows PowerShell 5.1. Never let git rewrite
+# them on checkout or commit, on any platform.
+* -text
