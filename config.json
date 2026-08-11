@@ -3,5 +3,6 @@
   "downloadsPath": "",
   "archivePath": "",
   "archiveRetentionDays": 30,
-  "pollSeconds": 3
+  "pollSeconds": 3,
+  "printSummary": true
 }
