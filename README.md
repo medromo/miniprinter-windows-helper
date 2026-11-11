@@ -1,5 +1,20 @@
 # miniprinter-windows-helper
 
+## Quick start
+
+On the Windows station, in PowerShell, download the installer and run it:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; Invoke-WebRequest https://raw.githubusercontent.com/medromo/miniprinter-windows-helper/main/install-helper.ps1 -OutFile install-helper.ps1 -UseBasicParsing
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-helper.ps1
+```
+
+To update to the latest version later, run it again from the install folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\mascotasymas\print-helper\install-helper.ps1
+```
+
 Sends raw ESC/POS files to a receipt printer on a Windows station, with a
 confirmation dialog that shows what is about to print.
 
@@ -9,14 +24,15 @@ puts it on paper on an **Epson TM-T20II**. Nothing about it is specific to that
 app beyond the preview decoder, so it works for any ESC/POS stream that opens
 with `ESC @`.
 
-Three files, no dependencies, no installer. Everything it uses ships with
-Windows.
+Three files on the station, no dependencies. Everything it uses ships with
+Windows. An optional installer script automates the setup.
 
 | File | What it is |
 | --- | --- |
 | `Print-DepositOrders.ps1` | The whole helper. UTF-8 **with BOM**, CRLF. |
 | `print-orders.cmd` | The launcher. **The way everything is run.** |
 | `config.json` | Overrides for the defaults. Plain UTF-8, **no** BOM. |
+| `install-helper.ps1` | Installs and updates (see [Installing](#installing)). It copies itself into the install folder so it can be run again there. UTF-8 **with BOM**, CRLF. |
 
 ## Why raw spooling and not a shared printer
 
@@ -37,8 +53,8 @@ use.
 Two modes, one script, sharing the whole core:
 
 - **Watch** (`-Watch`) — the normal path. Sits in the system tray, polls the
-  Downloads folder, and the moment a matching file lands it shows the
-  confirmation dialog. Confirm, paper comes out, file is archived.
+  Downloads folder, and the moment a file matching `filePatterns` lands it
+  shows the confirmation dialog. Confirm, paper comes out, file is archived.
 - **One-shot** (no arguments) — a desktop shortcut that prints the most recent
   file. This is the **fallback**, not a redundancy: it is what you use when the
   watcher isn't running, and with `-Path` it reprints something out of the
@@ -98,7 +114,7 @@ what separates one order from the next.
 
 **On anything it doesn't recognise it degrades instead of guessing.** An unknown
 escape sequence aborts the decode and the dialog falls back to
-`N órdenes — no se pudo leer el detalle`, still offering to print. The count in
+`N tickets de depósito — no se pudo leer el detalle`, still offering to print. The count in
 that fallback is a byte scan for cut sequences, which can't be wrong.
 
 One chunk in the file is deliberately **not** an order: the producer ends the
@@ -107,6 +123,15 @@ stream with a recap — every day with its invoices and the grand total — head
 chunk didn't parse", so a chunk that should have been an order and wasn't still
 aborts the whole preview. That distinction is the point: degrading is only safe
 when you know what you're degrading past.
+
+Only files named like deposit orders (`*-ordenes-deposito*.bin`) get that
+detail or that warning. Anything else picked up through `filePatterns`, such as a
+sale ticket, just says how many tickets will come out (`Se imprimirá 1 ticket.`)
+under the title *Imprimir ticket*. There is no detail to miss there, so there is
+no reason to sound the alarm. The decision goes by file name, not by whether the
+decode worked, so a deposit file that stops parsing still says so instead of
+passing as a plain ticket. If a file with another name does parse as deposit
+orders, it gets the full detail anyway.
 
 Showing the `Generado` timestamp is also what replaces a separate "this file is
 old" guard: a file from yesterday is self-evident once the date is on screen. The
@@ -151,13 +176,32 @@ default.
   "downloadsPath": "",
   "archivePath": "",
   "archiveRetentionDays": 30,
-  "pollSeconds": 3
+  "pollSeconds": 3,
+  "filePatterns": ["*-ordenes-deposito*.bin", "*-ticket.bin"]
 }
 ```
 
 Leave `printerName` as `""` to let it auto-detect, `downloadsPath` as `""` for
 `%USERPROFILE%\Downloads`, and `archivePath` as `""` for an `ordenes-impresas`
 folder beside the script.
+
+`filePatterns` is the list of file-name wildcards the helper picks up, in both
+Downloads and the archive. Matches from every pattern are merged and
+de-duplicated, and the most recent one wins. A single string is accepted in
+place of a list; missing, empty or all-blank falls back to
+`["*-ordenes-deposito*.bin"]`, the original behaviour. Widening it is safe
+because nothing about the checks changes: every match still has to be stable,
+under 1 MB and start with `ESC @` before anything is printed. Files that aren't
+deposit orders, like `2026-11-11-P-0001-ticket.bin`, get no detail in the
+dialog, only how many tickets are about to print (see
+[The confirmation dialog](#the-confirmation-dialog)). The archive prune
+only deletes files that match a pattern **and** carry the timestamp prefix the
+helper added when archiving them, so a loose pattern can't delete anything the
+helper didn't put there.
+
+Re-running the installer adds this field, and any other new field, to an
+existing `config.json` with the repository's value. It never changes a field the
+station already has.
 
 Point `archivePath` at an absolute path outside the install folder if you ever
 expect to replace that folder wholesale — otherwise the archive goes with it.
@@ -166,6 +210,52 @@ Save `config.json` as plain UTF-8 **without** BOM. Unlike the `.ps1`, a BOM here
 is what breaks a strict JSON parser.
 
 ## Installing
+
+### Automatic
+
+From PowerShell on the station, in the folder where `install-helper.ps1` is:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-helper.ps1
+```
+
+See [Quick start](#quick-start) for the commands. Without admin rights, the
+installer does manual steps 1–6 below:
+
+- Downloads the repository from GitHub (`HEAD` of the default branch) and checks
+  the BOM and `config.json` **before** touching the installation. It installs
+  what is **pushed**, not what is on your machine, and the repository has to be
+  reachable without credentials.
+- Copies the scripts to `C:\mascotasymas\print-helper\` as files, so the BOM
+  survives. It copies itself there too.
+- On a first install, lists the printers and asks for the exact name (Enter
+  keeps auto-detection), then offers the self test. Only the `printerName`
+  value is rewritten, so the rest of `config.json` stays as it is.
+- Creates the desktop shortcut and registers and starts the
+  `Ordenes de deposito - watcher` scheduled task with the settings from step 6.
+
+**Running it again updates** to whatever is newest in the repository:
+
+- It waits until no confirmation dialog is open and nothing is printing. It holds
+  the same lock the helper takes, and gives up after a minute.
+- It stops the running watcher, both the scheduled task and one started by hand
+  with `-Watch`.
+- It replaces the scripts, including itself.
+- It adds fields that are new in the repository's `config.json` and leaves every
+  existing value alone.
+- It re-registers the task and starts the watcher again with the new code. Any
+  other scheduled task that runs `Print-DepositOrders.ps1 -Watch`, such as one
+  created by hand from step 6, is removed so two watchers can't compete.
+
+It doesn't ask for the printer again or print a test page.
+
+A first install still needs step 7: restart the machine and drop a `.bin` into
+Downloads yourself.
+
+`install-helper.ps1` itself must keep its BOM. Its prompts contain accents, and
+the same PS 5.1 rule as below applies.
+
+### Manual
 
 > **Always go through `print-orders.cmd`, never the `.ps1` directly.** A default
 > Windows install refuses to run an unsigned `.ps1`
@@ -327,6 +417,8 @@ Exit codes: `0` printed, `1` error, `2` nothing to print, `3` cancelled or busy.
 | --- | --- |
 | `la ejecución de scripts está deshabilitada en este sistema` | The `.ps1` was called directly. Use `print-orders.cmd` instead — don't change the execution policy. |
 | Nothing happens after downloading | The watcher isn't running — no tray icon. Use the shortcut, then check the scheduled task. |
+| Installer says *Hay un diálogo de impresión abierto…* | A confirmation dialog was left open on screen. Answer it and run the installer again. |
+| Nothing happens after downloading, and the tray icon is there | The file name doesn't match any entry in `filePatterns`. Compare the downloaded name with `config.json`. A browser that appended ` (1)` still matches `*-ordenes-deposito*.bin` but not `*-ticket.bin`. |
 | `No existe una impresora llamada '…'` | The printer was renamed or reinstalled. The message lists what's installed; update `config.json`. |
 | Dialog says *no se pudo leer el detalle* | The producer emits a control sequence the decoder doesn't know. Printing still works; see the format note below. |
 | `OpenPrinter falló` | Printer offline, unplugged, or a driver that's gone. Check it in Windows first. |

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Windows-only helper that sends raw ESC/POS files (deposit orders downloaded from the POS web app) to an Epson TM-T20II via the spooler, after a WinForms confirmation dialog that previews what will print. Target runtime is **Windows PowerShell 5.1** with nothing installed beyond stock Windows. `README.md` is the operator/install manual and explains the design rationale at length — read it before changing behaviour.
 
-Three files: `Print-DepositOrders.ps1` (everything), `print-orders.cmd` (launcher that adds `-ExecutionPolicy Bypass`; the only supported entry point), `config.json` (optional overrides).
+Three files: `Print-DepositOrders.ps1` (everything), `print-orders.cmd` (launcher that adds `-ExecutionPolicy Bypass`; the only supported entry point), `config.json` (optional overrides, including `filePatterns`, the file-name wildcards the watcher picks up). `install-helper.ps1` installs and, when run again, updates: it downloads the repo from GitHub (so it installs what is pushed), stops the watcher while holding the helper's print mutex, replaces the scripts (itself included), adds new `config.json` fields without touching existing ones, and restarts the scheduled task. It must also be UTF-8 with BOM + CRLF.
 
 ## Development constraints
 
@@ -23,7 +23,7 @@ Flow for both modes (`-Watch` tray poller, or one-shot printing the latest file 
 
 1. `Resolve-Printer` — exact `-eq` match against `Win32_Printer`; with no configured name, auto-picks only if exactly one printer matches `TM-T20`. Never guesses.
 2. Validate: non-empty, < 1 MB, first two bytes `1B 40` (`ESC @`).
-3. Preview: `ConvertFrom-EscPos` → `Get-OrderSummary` → `Show-PrintConfirmation`.
+3. Preview: `ConvertFrom-EscPos` → `Get-OrderSummary` → `Show-PrintConfirmation`. Only files named `*-ordenes-deposito*.bin` (`$DepositOrderPattern`) get per-day detail, or the "no se pudo leer el detalle" warning when it doesn't parse; other `filePatterns` matches (tickets) only show a ticket count.
 4. `Send-RawBytes` — P/Invoke into `winspool.drv` (`OpenPrinter`/`StartDocPrinter`/`WritePrinter`, datatype `RAW`), type compiled via `Add-Type` in `Initialize-RawPrinterType`. Deliberately not a shared printer + `copy /b`.
 5. `Move-ToArchive` — timestamp prefix, into `ordenes-impresas\` beside the script (not Downloads), prune past retention. Reprints from the archive are not re-moved.
 6. `Write-Log` to `%LOCALAPPDATA%\MascotasYMas\logs\print-orders.log`.

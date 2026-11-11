@@ -19,7 +19,10 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$FilePattern = '*-ordenes-deposito*.bin'
+# The one format the preview knows. Other patterns in filePatterns (tickets)
+# print the same way, but the dialog only says how many will come out.
+$DepositOrderPattern = '*-ordenes-deposito*.bin'
+$DefaultFilePatterns = @($DepositOrderPattern)
 $MaxFileBytes = 1MB
 $StaleAfterHours = 2
 
@@ -32,6 +35,7 @@ function Get-HelperConfig {
     archivePath          = ''
     archiveRetentionDays = 30
     pollSeconds          = 3
+    filePatterns         = $DefaultFilePatterns
   }
   $file = Join-Path $PSScriptRoot 'config.json'
   if (Test-Path -LiteralPath $file) {
@@ -49,6 +53,13 @@ function Get-HelperConfig {
   if ($defaults.archivePath -eq '') {
     $defaults.archivePath = Join-Path $PSScriptRoot 'ordenes-impresas'
   }
+  # A single string is accepted for convenience; blanks are dropped, and an
+  # empty list falls back to the default rather than matching nothing.
+  $patterns = @(@($defaults.filePatterns) |
+      Where-Object { $_ -is [string] -and $_.Trim() -ne '' } |
+      ForEach-Object { $_.Trim() })
+  if ($patterns.Count -eq 0) { $patterns = $DefaultFilePatterns }
+  $defaults.filePatterns = $patterns
   return $defaults
 }
 
@@ -279,6 +290,9 @@ function Show-PrintConfirmation {
   )
   $text = ConvertFrom-EscPos -Bytes $Bytes
   $orders = Get-OrderSummary -Text $text
+  # Decided by name, not by "it parsed": a deposit file whose detail can't be
+  # read must still say so instead of passing as a plain ticket.
+  $isDepositFile = $File.Name -like $DepositOrderPattern
   $lines = New-Object System.Collections.Generic.List[string]
 
   if ($orders) {
@@ -297,11 +311,18 @@ function Show-PrintConfirmation {
       $lines.Add(('   Total: ${0}' -f $total.ToString('N2', [Globalization.CultureInfo]::InvariantCulture)))
     }
   }
-  else {
+  elseif ($isDepositFile) {
     # "tickets", not "órdenes": with no detail there is no way to tell whether
     # one of those cuts belongs to the summary.
     $cuts = Measure-CutCount -Bytes $Bytes
     $lines.Add(('{0} tickets de depósito — no se pudo leer el detalle.' -f $cuts))
+  }
+  else {
+    # Not a deposit-order file, so there is no detail to miss: just say what is
+    # about to come out. A stream without a cut is still one ticket.
+    $cuts = [Math]::Max(1, (Measure-CutCount -Bytes $Bytes))
+    if ($cuts -eq 1) { $lines.Add('Se imprimirá 1 ticket.') }
+    else { $lines.Add(('Se imprimirán {0} tickets.' -f $cuts)) }
   }
 
   if (Test-HasSummaryTicket -Text $text) {
@@ -325,6 +346,7 @@ function Show-PrintConfirmation {
   }
   $lines.Add('')
   $lines.Add('¿Imprimir?')
+  $title = if ($orders -or $isDepositFile) { 'Órdenes de depósito' } else { 'Imprimir ticket' }
 
   # A plain MessageBox opens behind the browser the operator just used, so it
   # gets a topmost owner rather than a topmost style of its own.
@@ -341,7 +363,7 @@ function Show-PrintConfirmation {
     $answer = [System.Windows.Forms.MessageBox]::Show(
       $owner,
       ($lines -join [Environment]::NewLine),
-      'Órdenes de depósito',
+      $title,
       [System.Windows.Forms.MessageBoxButtons]::YesNo,
       $icon)
   }
@@ -375,9 +397,22 @@ function Wait-FileStable {
   return $false
 }
 
+# Union of every pattern, de-duplicated by full path: a file matched by two
+# patterns must not be offered twice. Keys are case-insensitive, like NTFS.
+function Get-MatchingFiles {
+  param([string]$Folder, [string[]]$Patterns)
+  $seen = @{}
+  foreach ($pattern in $Patterns) {
+    foreach ($item in @(Get-ChildItem -LiteralPath $Folder -Filter $pattern -File -ErrorAction SilentlyContinue)) {
+      if (-not $seen.ContainsKey($item.FullName)) { $seen[$item.FullName] = $item }
+    }
+  }
+  return @($seen.Values)
+}
+
 function Find-LatestOrderFile {
-  param([string]$Folder)
-  Get-ChildItem -LiteralPath $Folder -Filter $FilePattern -File -ErrorAction SilentlyContinue |
+  param([string]$Folder, [string[]]$Patterns)
+  Get-MatchingFiles -Folder $Folder -Patterns $Patterns |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 }
@@ -399,10 +434,11 @@ function Move-ToArchive {
 
   # Only our own files: archivePath is configurable, and a prune that deletes
   # everything older than N days in whatever folder it was pointed at is a
-  # footgun waiting for a typo.
+  # footgun waiting for a typo. filePatterns is configurable too, so a loose
+  # pattern is reined in by also requiring the timestamp prefix added above.
   $cutoff = (Get-Date).AddDays(-[int]$Config.archiveRetentionDays)
-  Get-ChildItem -LiteralPath $archiveFull -Filter $FilePattern -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTime -lt $cutoff } |
+  Get-MatchingFiles -Folder $archiveFull -Patterns $Config.filePatterns |
+    Where-Object { $_.Name -match '^\d{8}-\d{6}-' -and $_.LastWriteTime -lt $cutoff } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
@@ -502,7 +538,7 @@ function Start-WatchMode {
   # by path wouldn't match.
   $itemPrint = $menu.Items.Add('Imprimir el archivo más reciente')
   $itemPrint.add_Click({
-      if (-not (Find-LatestOrderFile -Folder $script:Config.downloadsPath)) {
+      if (-not (Find-LatestOrderFile -Folder $script:Config.downloadsPath -Patterns $script:Config.filePatterns)) {
         $script:Notify.ShowBalloonTip(4000, 'Nada que imprimir',
           'No hay órdenes en Descargas. Descárgalas desde el POS.',
           [System.Windows.Forms.ToolTipIcon]::Info)
@@ -546,7 +582,7 @@ function Start-WatchMode {
 }
 
 function Invoke-Poll {
-  $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath
+  $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath -Patterns $script:Config.filePatterns
   if (-not $file) { return }
   # Keyed by write time too, so re-downloading a file you declined asks again.
   $key = '{0}|{1}' -f $file.FullName, $file.LastWriteTimeUtc.Ticks
@@ -600,7 +636,7 @@ try {
     $file = Get-Item -LiteralPath $Path
   }
   else {
-    $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath
+    $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath -Patterns $script:Config.filePatterns
   }
 
   if (-not $file) {
