@@ -93,7 +93,11 @@ try {
     }
 }
 finally {
-    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    # Con un usuario con espacio ("CAJA 1"), %TEMP% viene en forma corta 8.3
+    # (C:\Users\CAJA1~1\...) y Remove-Item -Recurse de PS 5.1 truena con ella
+    # aun con SilentlyContinue. Borrar una carpeta temporal nunca debe abortar
+    # la instalación, así que se hace con .NET y se ignora cualquier fallo.
+    try { [IO.Directory]::Delete($tmp, $true) } catch { }
 }
 Set-Location $Dest
 Write-Host "Archivos en $Dest" -ForegroundColor Green
