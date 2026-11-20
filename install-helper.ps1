@@ -126,8 +126,13 @@ if (-not $isUpdate) {
 }
 
 # 6. Acceso directo en el escritorio (one-shot / respaldo). Se recrea siempre.
+#    Ya no solo imprime órdenes de depósito (también tickets), así que el nombre
+#    anterior se borra para no dejar dos accesos directos.
+$desktop = [Environment]::GetFolderPath('Desktop')
+$oldLnk  = Join-Path $desktop 'Imprimir órdenes de depósito.lnk'
+if (Test-Path -LiteralPath $oldLnk) { Remove-Item -LiteralPath $oldLnk -Force -ErrorAction SilentlyContinue }
 $sh  = New-Object -ComObject WScript.Shell
-$lnk = $sh.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Imprimir órdenes de depósito.lnk'))
+$lnk = $sh.CreateShortcut((Join-Path $desktop 'Imprimir tickets y órdenes.lnk'))
 $lnk.TargetPath       = "$Dest\print-orders.cmd"
 $lnk.WorkingDirectory = $Dest
 $lnk.IconLocation     = "$env:SystemRoot\System32\imageres.dll,0"   # cámbialo por el de impresora en Propiedades
@@ -142,6 +147,12 @@ $action   = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory 
             -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Dest\Print-DepositOrders.ps1`" -Watch"
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $user
 $trigger.Delay = 'PT30S'
+# Repetir cada 5 minutos mientras dure la sesión: con MultipleInstances
+# IgnoreNew, si el watcher sigue vivo no pasa nada; si murió (falló al iniciar
+# sesión, lo cerraron desde la bandeja, lo tumbó una actualización) vuelve solo.
+# El reinicio por fallo de la tarea no cubre esto: no reacciona a un exit code.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $settings = New-ScheduledTaskSettingsSet -Hidden -Compatibility Win8 `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `

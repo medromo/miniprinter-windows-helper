@@ -243,7 +243,10 @@ installer does manual steps 1–6 below:
 - It replaces the scripts, including itself.
 - It adds fields that are new in the repository's `config.json` and leaves every
   existing value alone.
-- It re-registers the task and starts the watcher again with the new code. Any
+- It renames the desktop shortcut from *Imprimir órdenes de depósito* to
+  *Imprimir tickets y órdenes*.
+- It re-registers the task (which also adds the 5-minute repetition to older
+  installs) and starts the watcher again with the new code. Any
   other scheduled task that runs `Print-DepositOrders.ps1 -Watch`, such as one
   created by hand from step 6, is removed so two watchers can't compete.
 
@@ -326,8 +329,9 @@ the same PS 5.1 rule as below applies.
 
 5. **Create the desktop shortcut.** Right-click `print-orders.cmd` → *Mostrar más
    opciones* on Windows 11 (or Shift + right-click to skip that) → *Enviar a* →
-   *Escritorio (crear acceso directo)*, then rename it *Imprimir órdenes de
-   depósito*.
+   *Escritorio (crear acceso directo)*, then rename it *Imprimir tickets y
+   órdenes* (it prints whatever `filePatterns` matches, not only deposit
+   orders).
 
    In its Properties, set an icon — *Cambiar icono* →
    `%SystemRoot%\System32\imageres.dll` → pick the printer. A `.cmd` shortcut
@@ -359,6 +363,11 @@ the same PS 5.1 rule as below applies.
      account's session, so other logons just produce failed attempts. Optionally
      *Delay task for 30 seconds*: logon is the busiest moment of the boot, and
      the tray icon appearing once the desktop has settled is more reliable.
+     Tick **Repeat task every 5 minutes** for a duration of **Indefinitely**:
+     while the watcher runs, each repetition is ignored (see *Settings*); if it
+     died — failed at logon, closed from the tray, killed by an update — it comes
+     back within five minutes. *If the task fails, restart* does not cover
+     this: Task Scheduler doesn't treat a non-zero exit code as a failure.
    - **Actions** — Start a program
      - Program: `powershell.exe`
      - Arguments:
@@ -371,8 +380,8 @@ the same PS 5.1 rule as below applies.
    - **Settings** — untick *Stop the task if it runs longer than…*; left on, it
      kills the watcher after three days with no indication why. Leave *If the
      task is already running: Do not start a new instance*, so two watchers can't
-     compete. Optionally tick *If the task fails, restart every 1 minute, up to 3
-     times*.
+     compete — that is also what makes the 5-minute repetition harmless.
+     Optionally tick *If the task fails, restart every 1 minute, up to 3 times*.
 
    There is still a brief console flash at logon. If that bothers you, point the
    action at a one-line `.vbs` shim that runs the same command with
@@ -416,7 +425,8 @@ Exit codes: `0` printed, `1` error, `2` nothing to print, `3` cancelled or busy.
 | Symptom | Cause |
 | --- | --- |
 | `la ejecución de scripts está deshabilitada en este sistema` | The `.ps1` was called directly. Use `print-orders.cmd` instead — don't change the execution policy. |
-| Nothing happens after downloading | The watcher isn't running — no tray icon. Use the shortcut, then check the scheduled task. |
+| Nothing happens after downloading | The watcher isn't running — no tray icon. Use the shortcut; the task brings it back within 5 minutes. If it doesn't, check the scheduled task's trigger has the repetition. |
+| Tray icon is there, but a file fails with `No existe una impresora…` / `No se encontro ninguna impresora…` | The printer wasn't available when the file arrived (or at logon). The watcher keeps running and retries on the next file; fix the printer, then *Imprimir el archivo más reciente* from the tray. |
 | Installer says *Hay un diálogo de impresión abierto…* | A confirmation dialog was left open on screen. Answer it and run the installer again. |
 | Nothing happens after downloading, and the tray icon is there | The file name doesn't match any entry in `filePatterns`. Compare the downloaded name with `config.json`. A browser that appended ` (1)` still matches `*-ordenes-deposito*.bin` but not `*-ticket.bin`. |
 | `No existe una impresora llamada '…'` | The printer was renamed or reinstalled. The message lists what's installed; update `config.json`. |

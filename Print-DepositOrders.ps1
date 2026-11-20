@@ -527,6 +527,18 @@ function Start-WatchMode {
 
   $script:Running = $true
   $script:Declined = @{}
+  $script:LastPollError = ''
+
+  # At logon the spooler or WMI may not be ready yet, or the printer was
+  # renamed. Exiting here would leave no watcher until the next logon, and Task
+  # Scheduler doesn't restart a task over a non-zero exit code. So start
+  # anyway; Invoke-Poll resolves the printer again when there is a file to
+  # print, and that error surfaces in a balloon where the operator can see it.
+  $script:Printer = $Printer
+  if (-not $script:Printer) {
+    try { $script:Printer = Resolve-Printer -Requested $Config.printerName }
+    catch { Write-Log ('WATCH      sin impresora al iniciar: {0}' -f $_.Exception.Message) }
+  }
 
   $script:Notify = New-Object System.Windows.Forms.NotifyIcon
   $script:Notify.Icon = [System.Drawing.SystemIcons]::Information
@@ -561,7 +573,7 @@ function Start-WatchMode {
   $script:Notify.ContextMenuStrip = $menu
   $script:Notify.Visible = $true
 
-  Write-Log ('WATCH      iniciado  carpeta={0}  impresora={1}' -f $Config.downloadsPath, $Printer)
+  Write-Log ('WATCH      iniciado  carpeta={0}  impresora={1}' -f $Config.downloadsPath, $script:Printer)
   $script:Notify.ShowBalloonTip(3000, 'Órdenes de depósito',
     'Listo. Descarga las órdenes desde el POS y te preguntaré antes de imprimir.',
     [System.Windows.Forms.ToolTipIcon]::Info)
@@ -582,12 +594,27 @@ function Start-WatchMode {
 }
 
 function Invoke-Poll {
-  $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath -Patterns $script:Config.filePatterns
+  # An unreadable Downloads folder must not end the loop (and the watcher with
+  # it); log it once, not every pollSeconds.
+  try {
+    $file = Find-LatestOrderFile -Folder $script:Config.downloadsPath -Patterns $script:Config.filePatterns
+    $script:LastPollError = ''
+  }
+  catch {
+    if ($script:LastPollError -ne $_.Exception.Message) {
+      $script:LastPollError = $_.Exception.Message
+      Write-Log ('ERROR      leyendo {0}: {1}' -f $script:Config.downloadsPath, $_.Exception.Message)
+    }
+    return
+  }
   if (-not $file) { return }
   # Keyed by write time too, so re-downloading a file you declined asks again.
   $key = '{0}|{1}' -f $file.FullName, $file.LastWriteTimeUtc.Ticks
   if ($script:Declined.ContainsKey($key)) { return }
   try {
+    if (-not $script:Printer) {
+      $script:Printer = Resolve-Printer -Requested $script:Config.printerName
+    }
     $result = Invoke-PrintJob -File $file -Config $script:Config -Printer $script:Printer
     switch ($result) {
       'printed' {
@@ -617,17 +644,19 @@ try {
     exit 0
   }
 
+  # Watch mode resolves the printer itself and tolerates it being missing at
+  # logon; see Start-WatchMode.
+  if ($Watch) {
+    Start-WatchMode -Config $script:Config -Printer ''
+    exit 0
+  }
+
   $script:Printer = Resolve-Printer -Requested $script:Config.printerName
 
   if ($SelfTest) {
     Write-Host ('Enviando ticket de prueba a "{0}"...' -f $script:Printer)
     Invoke-SelfTest -Printer $script:Printer
     Write-Host 'Listo. Revisa el papel: acentos, monto grande y corte.' -ForegroundColor Green
-    exit 0
-  }
-
-  if ($Watch) {
-    Start-WatchMode -Config $script:Config -Printer $script:Printer
     exit 0
   }
 
