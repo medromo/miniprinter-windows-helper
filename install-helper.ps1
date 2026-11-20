@@ -126,13 +126,15 @@ if (-not $isUpdate) {
 }
 
 # 6. Acceso directo en el escritorio (one-shot / respaldo). Se recrea siempre.
-#    Ya no solo imprime órdenes de depósito (también tickets), así que el nombre
-#    anterior se borra para no dejar dos accesos directos.
+#    Ya no solo imprime órdenes de depósito (también tickets), así que
+#    los nombres anteriores se borran para no dejar dos accesos directos.
 $desktop = [Environment]::GetFolderPath('Desktop')
-$oldLnk  = Join-Path $desktop 'Imprimir órdenes de depósito.lnk'
-if (Test-Path -LiteralPath $oldLnk) { Remove-Item -LiteralPath $oldLnk -Force -ErrorAction SilentlyContinue }
+foreach ($old in 'Imprimir órdenes de depósito.lnk', 'Imprimir tickets y órdenes.lnk') {
+    $oldLnk = Join-Path $desktop $old
+    if (Test-Path -LiteralPath $oldLnk) { Remove-Item -LiteralPath $oldLnk -Force -ErrorAction SilentlyContinue }
+}
 $sh  = New-Object -ComObject WScript.Shell
-$lnk = $sh.CreateShortcut((Join-Path $desktop 'Imprimir tickets y órdenes.lnk'))
+$lnk = $sh.CreateShortcut((Join-Path $desktop 'Imprimir pendientes.lnk'))
 $lnk.TargetPath       = "$Dest\print-orders.cmd"
 $lnk.WorkingDirectory = $Dest
 $lnk.IconLocation     = "$env:SystemRoot\System32\imageres.dll,0"   # cámbialo por el de impresora en Propiedades

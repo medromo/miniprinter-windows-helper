@@ -244,7 +244,7 @@ installer does manual steps 1–6 below:
 - It adds fields that are new in the repository's `config.json` and leaves every
   existing value alone.
 - It renames the desktop shortcut from *Imprimir órdenes de depósito* to
-  *Imprimir tickets y órdenes*.
+  *Imprimir pendientes*.
 - It re-registers the task (which also adds the 5-minute repetition to older
   installs) and starts the watcher again with the new code. Any
   other scheduled task that runs `Print-DepositOrders.ps1 -Watch`, such as one
@@ -329,8 +329,8 @@ the same PS 5.1 rule as below applies.
 
 5. **Create the desktop shortcut.** Right-click `print-orders.cmd` → *Mostrar más
    opciones* on Windows 11 (or Shift + right-click to skip that) → *Enviar a* →
-   *Escritorio (crear acceso directo)*, then rename it *Imprimir tickets y
-   órdenes* (it prints whatever `filePatterns` matches, not only deposit
+   *Escritorio (crear acceso directo)*, then rename it *Imprimir
+   pendientes* (it prints whatever `filePatterns` matches, not only deposit
    orders).
 
    In its Properties, set an icon — *Cambiar icono* →
